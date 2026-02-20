@@ -67,7 +67,7 @@ Website lengkap untuk bisnis hosting dengan fitur modern, integrasi payment gate
 ## Struktur Folder
 
 ```
-hosting-jadi-besar/
+hosting/
 ├── index.html              # Halaman utama
 ├── admin.html              # Admin panel
 ├── payment-success.html    # Halaman sukses pembayaran
@@ -88,7 +88,7 @@ hosting-jadi-besar/
 
 ### 1. Local Development
 ```bash
-cd hosting-jadi-besar
+cd hosting
 python -m http.server 8000
 ```
 
@@ -118,32 +118,6 @@ vercel
 4. Login ke Admin Panel > Pengaturan > Pterodactyl
 5. Masukkan URL Panel, PTLA, dan PTLC
 
-## Default Login Admin
-
-- **Username**: `admin`
-- **Password**: `admin123`
-
-> **PENTING**: Ganti password default segera setelah login pertama!
-
-## Cara Mengganti Password Admin
-
-1. Buka `admin.js`
-2. Cari baris:
-```javascript
-USERNAME_HASH: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', // admin
-PASSWORD_HASH: '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', // admin123
-```
-3. Generate hash baru:
-```javascript
-async function sha256(message) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(message);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-}
-// sha256('usernamebaru') dan sha256('passwordbaru')
-```
 
 ## Keamanan Admin Panel
 
