@@ -21,8 +21,6 @@ Website lengkap untuk bisnis hosting dengan fitur modern, integrasi payment gate
 - **Promo Code**: Sistem kode promo (contoh: BESAR20)
 
 ### 3. Admin Panel (Keamanan Tinggi)
-**URL**: `/admin.html`
-- **Login**: Username `admin`, Password `admin123`
 - **Keamanan**:
   - SHA256 password hashing
   - Session timeout (1 jam)
