@@ -5,6 +5,7 @@
   "main": "index.html",
   "type": "module",
   "dependencies": {
-    "openai": "latest"
+    "openai": "latest",
+    "@google/generative-ai": "latest"
   }
 }
