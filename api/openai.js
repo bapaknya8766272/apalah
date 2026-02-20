@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import OpenAI from "openai";
 
 export default async function handler(req, res) {
     // Aktifkan CORS
@@ -26,45 +26,67 @@ export default async function handler(req, res) {
 
     if (!apiKey) {
         return res.status(500).json({ 
-            error: 'Gemini API Key not configured',
+            error: 'API Key not configured',
             reply: 'Maaf, layanan AI sedang tidak tersedia. Silakan hubungi admin via WhatsApp.'
         });
     }
 
     try {
-        // Inisialisasi Google Gemini
-        const genAI = new GoogleGenerativeAI(apiKey);
-        
-        // Gunakan model "gemini-pro" yang 100% paling stabil dan universal
-        const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+        // JURUS RAHASIA: Pakai library OpenAI, tapi diarahkan ke server Google Gemini!
+        const client = new OpenAI({ 
+            apiKey: apiKey,
+            baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/" 
+        });
 
-        // Gabungkan instruksi sistem & pesan user ke dalam satu prompt
-        const prompt = `Kamu adalah Customer Service AI untuk ALFA Hosting, sebuah penyedia layanan hosting VPS, Panel Pterodactyl, dan Jasa IT.
+        // Menggunakan model Gemini 2.0 Flash (Paling baru, paling cepat, dan gratis)
+        const response = await client.chat.completions.create({
+            model: "gemini-2.0-flash", 
+            messages: [
+                {
+                    role: 'system',
+                    content: `Kamu adalah Customer Service AI untuk ALFA Hosting, sebuah penyedia layanan hosting VPS, Panel Pterodactyl, dan Jasa IT.
 
 Informasi perusahaan:
 - Nama: ALFA Hosting
 - WhatsApp: +62 822-2676-9163
 - Email: sanzbot938@gmail.com
 
-Layanan:
-1. VPS Cloud: 1GB (15rb), 4GB (35rb - Best Seller), 8GB (45rb)
-2. Panel Pterodactyl: 1GB (1rb), 4GB (4rb), Unlimited (10rb)
-3. Jasa IT: Install Panel (10rb), Buat Web (50rb), Fix Script (7rb)
+Layanan yang tersedia:
+1. VPS Cloud (mulai Rp 15.000/bulan)
+   - VPS 1GB: Rp 15.000
+   - VPS 4GB: Rp 35.000 (Best Seller)
+   - VPS 8GB: Rp 45.000
 
-Jawab dengan ramah, santai, profesional, singkat, padat, dan gunakan bahasa Indonesia. Jika tidak tahu jawabannya, arahkan ke WhatsApp admin.
+2. Panel Pterodactyl (mulai Rp 1.000/bulan)
+   - Panel 1GB: Rp 1.000
+   - Panel 4GB: Rp 4.000
+   - Panel Unlimited: Rp 10.000
 
-Pertanyaan Pelanggan: "${message}"
+3. Jasa IT
+   - Install Panel: Rp 10.000
+   - Buat Website: Rp 50.000
+   - Fix Script: Rp 7.000
 
-Jawaban CS ALFA Hosting:`;
+Jawab dengan:
+- Ramah, santai, dan profesional
+- Singkat dan jelas
+- Bahasa Indonesia yang baik
+- Jika tidak tahu, arahkan ke WhatsApp admin`
+                },
+                {
+                    role: 'user',
+                    content: message
+                }
+            ],
+            max_tokens: 300,
+            temperature: 0.7
+        });
 
-        // Generate balasan
-        const result = await model.generateContent(prompt);
-        const reply = result.response.text();
-
+        const reply = response.choices[0]?.message?.content || 'Maaf, saya tidak mengerti.';
         return res.status(200).json({ reply });
 
     } catch (error) {
-        console.error('Gemini Error:', error);
+        console.error('AI Error:', error);
         
         // Mode Fallback Offline (Cadangan jika API Error)
         const fallbackResponses = {
