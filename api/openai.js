@@ -35,9 +35,9 @@ export default async function handler(req, res) {
         // Inisialisasi Google Gemini
         const genAI = new GoogleGenerativeAI(apiKey);
         
-        // Menggunakan model Gemini 1.5 Flash (Gratis & Sangat Cepat)
+        // Menggunakan model Gemini 1.5 Flash Latest (Paling stabil & Gratis)
         const model = genAI.getGenerativeModel({ 
-            model: "gemini-1.5-flash",
+            model: "gemini-1.5-flash-latest",
             systemInstruction: `Kamu adalah Customer Service AI untuk ALFA Hosting, sebuah penyedia layanan hosting VPS, Panel Pterodactyl, dan Jasa IT.
 
 Informasi perusahaan:
@@ -77,7 +77,7 @@ Jawab dengan:
     } catch (error) {
         console.error('Gemini Error:', error);
         
-        // Mode Fallback Offline
+        // Mode Fallback Offline (Cadangan jika API Error)
         const fallbackResponses = {
             'harga': 'Kami menyediakan berbagai layanan dengan harga terjangkau:\n• VPS mulai dari Rp 15.000/bulan\n• Panel mulai dari Rp 1.000/bulan\n• Jasa IT tergantung kebutuhan',
             'cara beli': 'Cara pembelian:\n1. Pilih layanan yang diinginkan\n2. Klik "Tambah ke Keranjang"\n3. Lanjutkan ke pembayaran\n4. Selesaikan pembayaran via Pakasir',
