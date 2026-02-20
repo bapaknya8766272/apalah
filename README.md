@@ -1,4 +1,4 @@
-# HOSTING JADI BESAR - Website Layanan Hosting Modern
+# HOSTING - Website Layanan Hosting Modern
 
 Website lengkap untuk bisnis hosting dengan fitur modern, integrasi payment gateway, dan admin panel dengan keamanan tingkat tinggi.
 
