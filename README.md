@@ -153,7 +153,7 @@ https://app.pakasir.com/pay/{slug}/{amount}?order_id={order_id}
 
 ## Lisensi
 
-© 2026 HOSTING JADI BESAR. All rights reserved.
+© 2026 HOSTING. All rights reserved.
 
 ## Changelog
 
