@@ -1,8 +1,9 @@
 {
   "name": "alfa-hosting",
   "version": "1.0.0",
-  "description": "Website ALFA HOSTING dengan fitur chatbot AI untuk layanan pelanggan.",
+  "description": "Website Hosting Jadi Besar",
   "main": "index.html",
+  "type": "module",
   "dependencies": {
     "openai": "latest"
   }
