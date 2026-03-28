@@ -40,9 +40,7 @@ const app = express();
 // Security middleware
 app.use(helmetMiddleware);
 app.use(cors({
-    origin: process.env.NODE_ENV === 'production' 
-        ? ['https://yourdomain.com', 'https://www.yourdomain.com'] 
-        : '*',
+    origin: '*',
     credentials: true
 }));
 
@@ -87,14 +85,30 @@ app.use('/api/*', (req, res) => {
     });
 });
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(__dirname, '..')));
-    
-    app.get('*', (req, res) => {
-        res.sendFile(path.join(__dirname, '..', 'index.html'));
-    });
-}
+// Serve static files
+app.use(express.static(path.join(__dirname, '..')));
+
+// Handle specific routes
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'admin.html'));
+});
+
+app.get('/payment-success', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'payment-success.html'));
+});
+
+app.get('/privacy', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'privacy.html'));
+});
+
+app.get('/terms', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'terms.html'));
+});
+
+// Catch all - serve index.html for client-side routing
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '..', 'index.html'));
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {
