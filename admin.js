@@ -1,23 +1,57 @@
 /**
- * HOSTING JADI BESAR - Admin Panel JavaScript
- * Enhanced Security Version
+ * ALFA HOSTING - Admin Panel JavaScript
+ * MongoDB Backend Version with Enhanced Security
  */
+
+// ========================================
+// API CONFIGURATION
+// ========================================
+const API_BASE_URL = window.location.origin.includes('localhost') 
+    ? 'http://localhost:3000/api' 
+    : '/api';
 
 // ========================================
 // SECURITY CONFIGURATION
 // ========================================
 const SECURITY = {
-    // SHA256 of 'admin123' - CHANGE THIS!
-    USERNAME_HASH: '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918',
-    PASSWORD_HASH: '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9',
-    
     SESSION_DURATION: 60 * 60 * 1000, // 1 hour
     MAX_LOGIN_ATTEMPTS: 5,
     LOCKOUT_DURATION: 15 * 60 * 1000, // 15 minutes
-    
-    // Store login attempts
-    attempts: parseInt(localStorage.getItem('login_attempts') || '0'),
-    lockoutEnd: parseInt(localStorage.getItem('lockout_end') || '0')
+    TOKEN_REFRESH_INTERVAL: 5 * 60 * 1000, // 5 minutes
+};
+
+// ========================================
+// API HELPER
+// ========================================
+const api = {
+    async call(endpoint, options = {}) {
+        const url = `${API_BASE_URL}${endpoint}`;
+        const token = sessionStorage.getItem('admin_token');
+        
+        const defaultOptions = {
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token && { 'Authorization': `Bearer ${token}` })
+            }
+        };
+        
+        try {
+            const response = await fetch(url, { ...defaultOptions, ...options });
+            const data = await response.json();
+            
+            // Handle token expiration
+            if (response.status === 401 && token) {
+                sessionStorage.clear();
+                showLoginOverlay();
+                return { success: false, message: 'Sesi telah berakhir.' };
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('API Error:', error);
+            return { success: false, message: 'Terjadi kesalahan koneksi.' };
+        }
+    }
 };
 
 // ========================================
@@ -37,12 +71,6 @@ function generateSessionToken() {
     return Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function getClientIP() {
-    // In real implementation, this would come from server
-    // For client-side, we use a fingerprint
-    return localStorage.getItem('client_fingerprint') || generateFingerprint();
-}
-
 function generateFingerprint() {
     const fp = navigator.userAgent + navigator.language + screen.width + screen.height;
     let hash = 0;
@@ -51,9 +79,7 @@ function generateFingerprint() {
         hash = ((hash << 5) - hash) + char;
         hash = hash & hash;
     }
-    const fingerprint = Math.abs(hash).toString(16);
-    localStorage.setItem('client_fingerprint', fingerprint);
-    return fingerprint;
+    return Math.abs(hash).toString(16);
 }
 
 // ========================================
@@ -61,12 +87,15 @@ function generateFingerprint() {
 // ========================================
 const SessionManager = {
     timer: null,
+    refreshTimer: null,
     remaining: 60 * 60, // seconds
 
     start() {
-        this.remaining = parseInt(localStorage.getItem('session_timeout') || '3600');
+        const sessionTimeout = parseInt(localStorage.getItem('session_timeout')) || 3600;
+        this.remaining = sessionTimeout;
         this.updateDisplay();
         
+        // Main session timer
         this.timer = setInterval(() => {
             this.remaining--;
             this.updateDisplay();
@@ -95,6 +124,11 @@ const SessionManager = {
                 });
             }
         }, 1000);
+        
+        // Token refresh timer
+        this.refreshTimer = setInterval(() => {
+            this.refreshToken();
+        }, SECURITY.TOKEN_REFRESH_INTERVAL);
     },
 
     updateDisplay() {
@@ -106,13 +140,29 @@ const SessionManager = {
         }
     },
 
-    extend() {
-        this.remaining = parseInt(localStorage.getItem('session_timeout') || '3600');
+    async extend() {
+        const sessionTimeout = parseInt(localStorage.getItem('session_timeout')) || 3600;
+        this.remaining = sessionTimeout;
         sessionStorage.setItem('session_start', Date.now().toString());
+        await this.refreshToken();
+    },
+
+    async refreshToken() {
+        const refreshToken = sessionStorage.getItem('admin_refresh_token');
+        if (!refreshToken) return;
+        
+        const response = await api.call('/auth/refresh', {
+            method: 'POST',
+            body: JSON.stringify({ refreshToken })
+        });
+        
+        if (response.success) {
+            sessionStorage.setItem('admin_token', response.data.token);
+        }
     },
 
     expire() {
-        clearInterval(this.timer);
+        this.stop();
         Swal.fire({
             title: 'Sesi Berakhir',
             text: 'Sesi Anda telah berakhir. Silakan login kembali.',
@@ -127,6 +177,7 @@ const SessionManager = {
 
     stop() {
         clearInterval(this.timer);
+        clearInterval(this.refreshTimer);
     }
 };
 
@@ -139,68 +190,63 @@ async function login() {
     const errorEl = document.getElementById('login-error');
     const attemptsEl = document.getElementById('login-attempts');
     
-    // Check lockout
-    if (Date.now() < SECURITY.lockoutEnd) {
-        const remaining = Math.ceil((SECURITY.lockoutEnd - Date.now()) / 60000);
-        Swal.fire({
-            title: 'Akun Terkunci',
-            text: `Terlalu banyak percobaan gagal. Coba lagi dalam ${remaining} menit.`,
-            icon: 'error',
-            background: '#1a1a2e',
-            color: '#fff'
-        });
-        return;
-    }
+    // Reset error display
+    errorEl.classList.remove('show');
     
     if (!username || !password) {
         showLoginError('Username dan password harus diisi!');
         return;
     }
     
-    // Verify credentials
-    const usernameHash = await sha256(username);
-    const passwordHash = await sha256(password);
+    // Show loading
+    const loginBtn = document.querySelector('.login-form .btn-primary');
+    const originalText = loginBtn.innerHTML;
+    loginBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Memuat...';
+    loginBtn.disabled = true;
     
-    if (usernameHash === SECURITY.USERNAME_HASH && passwordHash === SECURITY.PASSWORD_HASH) {
-        // Success - reset attempts
-        SECURITY.attempts = 0;
-        localStorage.removeItem('login_attempts');
-        localStorage.removeItem('lockout_end');
+    try {
+        const response = await api.call('/auth/login', {
+            method: 'POST',
+            body: JSON.stringify({ username, password })
+        });
         
-        // Create session
-        const sessionToken = generateSessionToken();
-        sessionStorage.setItem('admin_auth', 'true');
-        sessionStorage.setItem('session_token', sessionToken);
-        sessionStorage.setItem('session_start', Date.now().toString());
-        sessionStorage.setItem('client_ip', getClientIP());
-        
-        showDashboard();
-    } else {
-        // Failed
-        SECURITY.attempts++;
-        localStorage.setItem('login_attempts', SECURITY.attempts);
-        
-        const remaining = SECURITY.MAX_LOGIN_ATTEMPTS - SECURITY.attempts;
-        
-        if (attemptsEl) {
-            attemptsEl.querySelector('span').textContent = remaining;
-            attemptsEl.style.display = 'block';
-        }
-        
-        if (SECURITY.attempts >= SECURITY.MAX_LOGIN_ATTEMPTS) {
-            SECURITY.lockoutEnd = Date.now() + SECURITY.LOCKOUT_DURATION;
-            localStorage.setItem('lockout_end', SECURITY.lockoutEnd);
+        if (response.success) {
+            // Store tokens securely
+            sessionStorage.setItem('admin_token', response.data.token);
+            sessionStorage.setItem('admin_refresh_token', response.data.refreshToken);
+            sessionStorage.setItem('session_start', Date.now().toString());
+            sessionStorage.setItem('client_fingerprint', generateFingerprint());
             
-            Swal.fire({
-                title: 'Akun Terkunci',
-                text: 'Terlalu banyak percobaan gagal. Akun terkunci selama 15 menit.',
-                icon: 'error',
-                background: '#1a1a2e',
-                color: '#fff'
-            });
+            // Store user info
+            localStorage.setItem('admin_username', response.data.user.username);
+            localStorage.setItem('admin_role', response.data.user.role);
+            
+            showDashboard();
         } else {
-            showLoginError(`Username atau password salah! (${remaining} percobaan tersisa)`);
+            // Show error
+            showLoginError(response.message || 'Username atau password salah!');
+            
+            // Update attempts display
+            const attempts = parseInt(localStorage.getItem('login_attempts') || '0') + 1;
+            localStorage.setItem('login_attempts', attempts);
+            
+            if (attemptsEl) {
+                const remaining = SECURITY.MAX_LOGIN_ATTEMPTS - attempts;
+                attemptsEl.querySelector('span').textContent = Math.max(0, remaining);
+                attemptsEl.style.display = 'block';
+            }
+            
+            // Shake animation
+            const loginBox = document.querySelector('.login-box');
+            loginBox.style.animation = 'shake 0.5s';
+            setTimeout(() => loginBox.style.animation = '', 500);
         }
+    } catch (error) {
+        console.error('Login error:', error);
+        showLoginError('Terjadi kesalahan saat login.');
+    } finally {
+        loginBtn.innerHTML = originalText;
+        loginBtn.disabled = false;
     }
 }
 
@@ -208,11 +254,6 @@ function showLoginError(message) {
     const errorEl = document.getElementById('login-error');
     errorEl.querySelector('span').textContent = message;
     errorEl.classList.add('show');
-    
-    // Shake animation
-    const loginBox = document.querySelector('.login-box');
-    loginBox.style.animation = 'shake 0.5s';
-    setTimeout(() => loginBox.style.animation = '', 500);
 }
 
 function togglePassword() {
@@ -228,30 +269,37 @@ function togglePassword() {
     }
 }
 
-function logout() {
+async function logout() {
+    // Call logout API
+    await api.call('/auth/logout', { method: 'POST' });
+    
     SessionManager.stop();
     sessionStorage.clear();
     location.reload();
 }
 
-function checkAuth() {
-    const auth = sessionStorage.getItem('admin_auth');
-    const sessionStart = parseInt(sessionStorage.getItem('session_start') || '0');
-    const clientIP = sessionStorage.getItem('client_ip');
-    const currentIP = getClientIP();
+async function checkAuth() {
+    const token = sessionStorage.getItem('admin_token');
     
-    // Check IP restriction
-    if (localStorage.getItem('ip_restriction') === 'true' && clientIP !== currentIP) {
-        sessionStorage.clear();
+    if (!token) {
+        showLoginOverlay();
         return;
     }
     
-    // Check session expiry
-    const sessionDuration = parseInt(localStorage.getItem('session_timeout') || '3600') * 1000;
+    // Verify token with server
+    const response = await api.call('/auth/check');
     
-    if (auth === 'true' && (Date.now() - sessionStart) < sessionDuration) {
+    if (response.success && response.data.isAuthenticated) {
         showDashboard();
+    } else {
+        sessionStorage.clear();
+        showLoginOverlay();
     }
+}
+
+function showLoginOverlay() {
+    document.getElementById('login-overlay').style.display = 'flex';
+    document.getElementById('admin-dashboard').style.display = 'none';
 }
 
 function showDashboard() {
@@ -267,14 +315,14 @@ function showDashboard() {
 // ========================================
 let salesChart, categoryChart;
 
-function initDashboard() {
-    updateStats();
-    initCharts();
-    renderRecentOrders();
-    renderProductsTable();
-    renderOrdersTable();
-    renderTestimonials();
-    renderCustomers();
+async function initDashboard() {
+    await updateStats();
+    await initCharts();
+    await renderRecentOrders();
+    await renderProductsTable();
+    await renderOrdersTable();
+    await renderTestimonials();
+    await renderCustomers();
     loadSettings();
     setupEventListeners();
 }
@@ -286,7 +334,7 @@ function setupEventListeners() {
         document.getElementById('sidebar').classList.toggle('mobile-open');
     });
     
-    // Nav items - FIXED: Use click handler with proper preventDefault
+    // Nav items
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', function(e) {
             e.preventDefault();
@@ -295,7 +343,6 @@ function setupEventListeners() {
             if (section) {
                 showSection(section);
             }
-            // Close mobile sidebar after click
             if (window.innerWidth <= 768) {
                 document.getElementById('sidebar').classList.remove('mobile-open');
             }
@@ -371,39 +418,60 @@ function showSection(sectionName) {
 // ========================================
 // STATS & CHARTS
 // ========================================
-function updateStats() {
-    const products = ProductManager.getAll();
-    const salesHistory = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const visitors = parseInt(localStorage.getItem('total_visits') || '0');
+async function updateStats() {
+    const response = await api.call('/dashboard/stats');
     
-    const revenue = salesHistory.reduce((total, sale) => total + (sale.price * sale.quantity), 0);
-    const lowStock = products.filter(p => p.category !== 'other' && p.stock <= 5).length;
+    if (!response.success) return;
     
-    document.getElementById('total-revenue').textContent = Utils.formatRupiah(revenue);
-    document.getElementById('total-orders').textContent = salesHistory.length;
-    document.getElementById('total-visitors').textContent = visitors.toLocaleString('id-ID');
-    document.getElementById('total-products').textContent = products.length;
+    const data = response.data;
+    
+    document.getElementById('total-revenue').textContent = Utils.formatRupiah(data.orders.totalRevenue);
+    document.getElementById('total-orders').textContent = data.orders.total;
+    document.getElementById('total-visitors').textContent = '2,500'; // Placeholder
+    document.getElementById('total-products').textContent = data.products.total;
     
     const lowStockEl = document.getElementById('low-stock-count');
     const stockAlert = document.getElementById('stock-alert');
     const lowStockBadge = document.getElementById('low-stock-badge');
     
-    if (lowStockEl) lowStockEl.textContent = lowStock;
-    if (stockAlert) stockAlert.style.display = lowStock > 0 ? 'flex' : 'none';
+    if (lowStockEl) lowStockEl.textContent = data.products.lowStock;
+    if (stockAlert) stockAlert.style.display = data.products.lowStock > 0 ? 'flex' : 'none';
     if (lowStockBadge) {
-        lowStockBadge.textContent = lowStock;
-        lowStockBadge.style.display = lowStock > 0 ? 'flex' : 'none';
+        lowStockBadge.textContent = data.products.lowStock;
+        lowStockBadge.style.display = data.products.lowStock > 0 ? 'flex' : 'none';
     }
 }
 
-function initCharts() {
+async function initCharts() {
+    const response = await api.call('/orders/sales-data?days=7');
+    
+    if (!response.success) return;
+    
+    const salesData = response.data.sales;
+    const categoryData = response.data.categories;
+    
     const salesCtx = document.getElementById('salesChart');
     const categoryCtx = document.getElementById('categoryChart');
     
     if (salesCtx) {
+        const labels = Object.keys(salesData).map(date => {
+            const d = new Date(date);
+            return d.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' });
+        });
+        const values = Object.values(salesData);
+        
         salesChart = new Chart(salesCtx, {
             type: 'line',
-            data: getSalesData(7),
+            data: {
+                labels,
+                datasets: [{
+                    data: values,
+                    borderColor: '#6366f1',
+                    backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -427,13 +495,12 @@ function initCharts() {
     }
     
     if (categoryCtx) {
-        const catData = getCategoryData();
         categoryChart = new Chart(categoryCtx, {
             type: 'doughnut',
             data: {
                 labels: ['VPS', 'Panel', 'Jasa'],
                 datasets: [{
-                    data: [catData.vps, catData.panel, catData.other],
+                    data: [categoryData.vps, categoryData.panel, categoryData.other],
                     backgroundColor: ['#6366f1', '#10b981', '#f59e0b'],
                     borderWidth: 0
                 }]
@@ -453,69 +520,43 @@ function initCharts() {
     }
 }
 
-function getSalesData(days) {
-    const salesHistory = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const labels = [];
-    const values = [];
-    
-    for (let i = days - 1; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
-        
-        labels.push(date.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' }));
-        
-        const daySales = salesHistory.filter(sale => {
-            const saleDate = new Date(sale.date).toISOString().split('T')[0];
-            return saleDate === dateStr;
-        });
-        
-        values.push(daySales.reduce((sum, s) => sum + (s.price * s.quantity), 0));
-    }
-    
-    return { labels, datasets: [{ data: values, borderColor: '#6366f1', backgroundColor: 'rgba(99, 102, 241, 0.1)', fill: true, tension: 0.4 }] };
-}
-
-function getCategoryData() {
-    const salesHistory = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const products = ProductManager.getAll();
-    
-    let vps = 0, panel = 0, other = 0;
-    
-    salesHistory.forEach(sale => {
-        const product = products.find(p => p.id === sale.id);
-        if (product) {
-            if (product.category === 'vps') vps += sale.quantity;
-            else if (product.category === 'panel') panel += sale.quantity;
-            else other += sale.quantity;
-        }
-    });
-    
-    return { vps, panel, other };
-}
-
-function updateSalesChart() {
+async function updateSalesChart() {
     const days = parseInt(document.getElementById('sales-period').value);
+    const response = await api.call(`/orders/sales-data?days=${days}`);
+    
+    if (!response.success) return;
+    
+    const salesData = response.data.sales;
+    const labels = Object.keys(salesData).map(date => {
+        const d = new Date(date);
+        return d.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric' });
+    });
+    const values = Object.values(salesData);
+    
     if (salesChart) {
-        salesChart.data = getSalesData(days);
+        salesChart.data.labels = labels;
+        salesChart.data.datasets[0].data = values;
         salesChart.update();
     }
 }
 
-function renderRecentOrders() {
+async function renderRecentOrders() {
     const tbody = document.getElementById('recent-orders-body');
     if (!tbody) return;
     
-    const orders = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const recentOrders = orders.slice(-5).reverse();
+    const response = await api.call('/orders/recent?limit=5');
     
-    tbody.innerHTML = recentOrders.map((order, index) => `
+    if (!response.success) return;
+    
+    const orders = response.data;
+    
+    tbody.innerHTML = orders.map((order, index) => `
         <tr>
-            <td><code class="order-id">${order.orderId || 'ORD-' + index}</code></td>
-            <td>${order.name || order.service}</td>
-            <td>${Utils.formatRupiah(order.price * order.quantity)}</td>
-            <td><span class="status-badge ${order.status || 'completed'}">${order.status === 'completed' ? 'Selesai' : order.status === 'pending' ? 'Pending' : 'Dibatalkan'}</span></td>
-            <td>${new Date(order.date).toLocaleDateString('id-ID')}</td>
+            <td><code class="order-id">${order.orderId}</code></td>
+            <td>${order.items?.[0]?.name || '-'}</td>
+            <td>${Utils.formatRupiah(order.total)}</td>
+            <td><span class="status-badge ${order.status}">${order.status === 'completed' ? 'Selesai' : order.status === 'pending' ? 'Pending' : 'Dibatalkan'}</span></td>
+            <td>${new Date(order.createdAt).toLocaleDateString('id-ID')}</td>
         </tr>
     `).join('');
 }
@@ -525,11 +566,15 @@ function renderRecentOrders() {
 // ========================================
 let currentProductFilter = 'all';
 
-function renderProductsTable(filter = '') {
+async function renderProductsTable(filter = '') {
     const tbody = document.getElementById('products-table-body');
     if (!tbody) return;
     
-    let products = ProductManager.getAll();
+    const response = await api.call('/products');
+    
+    if (!response.success) return;
+    
+    let products = response.data;
     
     if (currentProductFilter !== 'all') {
         products = products.filter(p => p.category === currentProductFilter);
@@ -540,10 +585,7 @@ function renderProductsTable(filter = '') {
         products = products.filter(p => p.name.toLowerCase().includes(q));
     }
     
-    const salesHistory = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    
     tbody.innerHTML = products.map(product => {
-        const sold = salesHistory.filter(s => s.id === product.id).reduce((sum, s) => sum + s.quantity, 0);
         const stockClass = product.category === 'other' ? 'unlimited' :
             product.stock > 10 ? 'high' : product.stock > 5 ? 'medium' : 'low';
         
@@ -555,8 +597,8 @@ function renderProductsTable(filter = '') {
                 <td><span class="category-badge ${product.category}">${categoryLabels[product.category]}</span></td>
                 <td>${Utils.formatRupiah(product.price)}</td>
                 <td><span class="stock-badge ${stockClass}">${product.category === 'other' ? '∞' : product.stock}</span></td>
-                <td><span class="status-badge ${product.category === 'other' || product.stock > 0 ? 'active' : 'inactive'}">${product.category === 'other' || product.stock > 0 ? 'Aktif' : 'Habis'}</span></td>
-                <td>${sold}</td>
+                <td><span class="status-badge ${product.isActive ? 'active' : 'inactive'}">${product.isActive ? 'Aktif' : 'Nonaktif'}</span></td>
+                <td>${product.soldCount || 0}</td>
                 <td>
                     <div class="action-btns">
                         ${product.category !== 'other' ? `<button class="action-btn restock" onclick="openRestockModal('${product.id}')" title="Restock"><i class="fas fa-plus"></i></button>` : ''}
@@ -579,13 +621,15 @@ function filterProductsByCategory(category) {
     renderProductsTable();
 }
 
-function openProductModal(productId = null) {
+async function openProductModal(productId = null) {
     const modal = document.getElementById('product-modal');
     const title = document.getElementById('product-modal-title');
     
     if (productId) {
-        const product = ProductManager.getById(productId);
-        if (!product) return;
+        const response = await api.call(`/products/${productId}`);
+        if (!response.success) return;
+        
+        const product = response.data;
         
         title.textContent = 'Edit Produk';
         document.getElementById('product-id').value = product.id;
@@ -621,7 +665,7 @@ function toggleStockField() {
     document.getElementById('stock-field').style.display = category === 'other' ? 'none' : 'block';
 }
 
-function saveProduct() {
+async function saveProduct() {
     const id = document.getElementById('product-id').value;
     const name = document.getElementById('product-name').value.trim();
     const category = document.getElementById('product-category').value;
@@ -638,25 +682,50 @@ function saveProduct() {
     
     const productData = { name, category, price, stock, desc, features, recommend };
     
+    let response;
     if (id) {
-        ProductManager.updateProduct(id, productData);
-        Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Produk diperbarui!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+        response = await api.call(`/products/${id}`, {
+            method: 'PUT',
+            body: JSON.stringify(productData)
+        });
     } else {
-        ProductManager.addProduct(productData);
-        Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Produk ditambahkan!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+        const newId = 'prod_' + Date.now().toString(36);
+        response = await api.call('/products', {
+            method: 'POST',
+            body: JSON.stringify({ id: newId, ...productData })
+        });
     }
     
-    closeProductModal();
-    renderProductsTable();
-    updateStats();
+    if (response.success) {
+        Swal.fire({ 
+            icon: 'success', 
+            title: 'Berhasil', 
+            text: id ? 'Produk diperbarui!' : 'Produk ditambahkan!', 
+            background: '#1a1a2e', 
+            color: '#fff', 
+            timer: 1500, 
+            showConfirmButton: false 
+        });
+        closeProductModal();
+        renderProductsTable();
+        updateStats();
+    } else {
+        Swal.fire({ 
+            icon: 'error', 
+            title: 'Error', 
+            text: response.message, 
+            background: '#1a1a2e', 
+            color: '#fff' 
+        });
+    }
 }
 
-function editProduct(productId) {
-    openProductModal(productId);
+async function editProduct(productId) {
+    await openProductModal(productId);
 }
 
-function deleteProduct(productId) {
-    Swal.fire({
+async function deleteProduct(productId) {
+    const result = await Swal.fire({
         title: 'Hapus Produk?',
         text: 'Produk akan dihapus permanen!',
         icon: 'warning',
@@ -666,18 +735,31 @@ function deleteProduct(productId) {
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            ProductManager.deleteProduct(productId);
+    });
+    
+    if (result.isConfirmed) {
+        const response = await api.call(`/products/${productId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.success) {
             renderProductsTable();
             updateStats();
-            Swal.fire({ icon: 'success', title: 'Terhapus', text: 'Produk berhasil dihapus!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+            Swal.fire({ 
+                icon: 'success', 
+                title: 'Terhapus', 
+                text: 'Produk berhasil dihapus!', 
+                background: '#1a1a2e', 
+                color: '#fff', 
+                timer: 1500, 
+                showConfirmButton: false 
+            });
         }
-    });
+    }
 }
 
-function resetProducts() {
-    Swal.fire({
+async function resetProducts() {
+    const result = await Swal.fire({
         title: 'Reset Produk?',
         text: 'Semua produk akan direset ke default!',
         icon: 'warning',
@@ -687,23 +769,47 @@ function resetProducts() {
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            localStorage.removeItem('products');
-            ProductManager.init();
+    });
+    
+    if (result.isConfirmed) {
+        const response = await api.call('/products/reset', {
+            method: 'POST'
+        });
+        
+        if (response.success) {
             renderProductsTable();
             updateStats();
-            Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Produk direset!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+            Swal.fire({ 
+                icon: 'success', 
+                title: 'Berhasil', 
+                text: 'Produk direset!', 
+                background: '#1a1a2e', 
+                color: '#fff', 
+                timer: 1500, 
+                showConfirmButton: false 
+            });
         }
+    }
+}
+
+function exportProducts() {
+    Swal.fire({
+        icon: 'info',
+        title: 'Export Produk',
+        text: 'Fitur export akan segera hadir!',
+        background: '#1a1a2e',
+        color: '#fff'
     });
 }
 
 // ========================================
 // RESTOCK
 // ========================================
-function openRestockModal(productId) {
-    const product = ProductManager.getById(productId);
-    if (!product) return;
+async function openRestockModal(productId) {
+    const response = await api.call(`/products/${productId}`);
+    if (!response.success) return;
+    
+    const product = response.data;
     
     document.getElementById('restock-product-id').value = productId;
     document.getElementById('restock-product-name').textContent = product.name;
@@ -717,7 +823,7 @@ function closeRestockModal() {
     document.getElementById('restock-modal').classList.remove('active');
 }
 
-function confirmRestock() {
+async function confirmRestock() {
     const productId = document.getElementById('restock-product-id').value;
     const amount = parseInt(document.getElementById('restock-amount').value);
     
@@ -726,34 +832,51 @@ function confirmRestock() {
         return;
     }
     
-    ProductManager.restock(productId, amount);
-    Swal.fire({ icon: 'success', title: 'Berhasil', text: `Stok ditambahkan!`, background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+    const response = await api.call(`/products/${productId}/restock`, {
+        method: 'POST',
+        body: JSON.stringify({ amount })
+    });
     
-    closeRestockModal();
-    renderProductsTable();
-    updateStats();
+    if (response.success) {
+        Swal.fire({ 
+            icon: 'success', 
+            title: 'Berhasil', 
+            text: `Stok ditambahkan!`, 
+            background: '#1a1a2e', 
+            color: '#fff', 
+            timer: 1500, 
+            showConfirmButton: false 
+        });
+        
+        closeRestockModal();
+        renderProductsTable();
+        updateStats();
+    }
 }
 
 // ========================================
 // ORDERS
 // ========================================
-function renderOrdersTable(filter = 'all') {
+async function renderOrdersTable(filter = 'all') {
     const tbody = document.getElementById('orders-table-body');
     if (!tbody) return;
     
-    let orders = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    if (filter !== 'all') orders = orders.filter(o => o.status === filter);
+    const response = await api.call(`/orders?status=${filter}`);
+    
+    if (!response.success) return;
+    
+    const orders = response.data;
     
     tbody.innerHTML = orders.map((order, index) => `
         <tr>
-            <td><code class="order-id">${order.orderId || 'ORD-' + index}</code></td>
-            <td>-</td>
-            <td>${order.name || order.service}</td>
-            <td>${order.quantity}</td>
-            <td>${Utils.formatRupiah(order.price * order.quantity)}</td>
-            <td><span class="status-badge ${order.status || 'completed'}">${order.status === 'completed' ? 'Selesai' : order.status === 'pending' ? 'Pending' : 'Dibatalkan'}</span></td>
-            <td>${new Date(order.date).toLocaleDateString('id-ID')}</td>
-            <td><button class="action-btn delete" onclick="deleteOrder(${index})" title="Hapus"><i class="fas fa-trash"></i></button></td>
+            <td><code class="order-id">${order.orderId}</code></td>
+            <td>${order.customerInfo?.name || '-'}</td>
+            <td>${order.items?.[0]?.name || '-'}</td>
+            <td>${order.items?.reduce((sum, item) => sum + item.quantity, 0) || 0}</td>
+            <td>${Utils.formatRupiah(order.total)}</td>
+            <td><span class="status-badge ${order.status}">${order.status === 'completed' ? 'Selesai' : order.status === 'pending' ? 'Pending' : 'Dibatalkan'}</span></td>
+            <td>${new Date(order.createdAt).toLocaleDateString('id-ID')}</td>
+            <td><button class="action-btn delete" onclick="deleteOrder('${order.orderId}')" title="Hapus"><i class="fas fa-trash"></i></button></td>
         </tr>
     `).join('');
 }
@@ -763,8 +886,8 @@ function filterOrders() {
     renderOrdersTable(filter);
 }
 
-function deleteOrder(index) {
-    Swal.fire({
+async function deleteOrder(orderId) {
+    const result = await Swal.fire({
         title: 'Hapus Pesanan?',
         text: 'Pesanan akan dihapus!',
         icon: 'warning',
@@ -774,21 +897,32 @@ function deleteOrder(index) {
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            const orders = JSON.parse(localStorage.getItem('salesHistory')) || [];
-            orders.splice(index, 1);
-            localStorage.setItem('salesHistory', JSON.stringify(orders));
+    });
+    
+    if (result.isConfirmed) {
+        const response = await api.call(`/orders/${orderId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.success) {
             renderOrdersTable();
             renderRecentOrders();
             updateStats();
-            Swal.fire({ icon: 'success', title: 'Terhapus', text: 'Pesanan berhasil dihapus!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+            Swal.fire({ 
+                icon: 'success', 
+                title: 'Terhapus', 
+                text: 'Pesanan berhasil dihapus!', 
+                background: '#1a1a2e', 
+                color: '#fff', 
+                timer: 1500, 
+                showConfirmButton: false 
+            });
         }
-    });
+    }
 }
 
-function clearAllOrders() {
-    Swal.fire({
+async function clearAllOrders() {
+    const result = await Swal.fire({
         title: 'Hapus Semua Pesanan?',
         text: 'Semua riwayat pesanan akan dihapus!',
         icon: 'warning',
@@ -798,30 +932,54 @@ function clearAllOrders() {
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            localStorage.removeItem('salesHistory');
+    });
+    
+    if (result.isConfirmed) {
+        const response = await api.call('/orders', {
+            method: 'DELETE'
+        });
+        
+        if (response.success) {
             renderOrdersTable();
             renderRecentOrders();
             updateStats();
-            Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Semua pesanan dihapus!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+            Swal.fire({ 
+                icon: 'success', 
+                title: 'Berhasil', 
+                text: 'Semua pesanan dihapus!', 
+                background: '#1a1a2e', 
+                color: '#fff', 
+                timer: 1500, 
+                showConfirmButton: false 
+            });
         }
+    }
+}
+
+function exportOrders() {
+    Swal.fire({
+        icon: 'info',
+        title: 'Export Pesanan',
+        text: 'Fitur export akan segera hadir!',
+        background: '#1a1a2e',
+        color: '#fff'
     });
 }
 
 // ========================================
-// TESTIMONIALS (SUPER FIX VISUAL BINTANG KOSONG)
+// TESTIMONIALS
 // ========================================
-function renderTestimonials() {
+async function renderTestimonials() {
     const grid = document.getElementById('testimonials-grid');
     if (!grid) return;
     
-    const testimonials = TestimonialManager.getAll().slice().reverse();
+    const response = await api.call('/testimonials/all');
+    
+    if (!response.success) return;
+    
+    const testimonials = response.data;
     
     grid.innerHTML = testimonials.map((t, index) => {
-        // PERBAIKAN DI SINI:
-        // 'fas' untuk bintang penuh kuning
-        // 'far' untuk bintang kosong abu-abu
         const stars = Array(5).fill(0).map((_, i) => 
             `<i class="${i < t.rating ? 'fas' : 'far'} fa-star" style="color: ${i < t.rating ? 'var(--warning)' : '#4b5563'};"></i>`
         ).join('');
@@ -839,8 +997,8 @@ function renderTestimonials() {
                 </div>
                 <p class="testimonial-text">${t.message}</p>
                 <div class="testimonial-footer">
-                    <span>${Utils.formatDate(t.date)}</span>
-                    <button class="action-btn delete" onclick="deleteTestimonial(${index})"><i class="fas fa-trash"></i></button>
+                    <span>${Utils.formatDate(t.createdAt)}</span>
+                    <button class="action-btn delete" onclick="deleteTestimonial('${t._id}')"><i class="fas fa-trash"></i></button>
                 </div>
             </div>
         `;
@@ -856,8 +1014,8 @@ function filterTestimonials() {
     });
 }
 
-function deleteTestimonial(index) {
-    Swal.fire({
+async function deleteTestimonial(id) {
+    const result = await Swal.fire({
         title: 'Hapus Testimoni?',
         text: 'Testimoni akan dihapus!',
         icon: 'warning',
@@ -867,38 +1025,54 @@ function deleteTestimonial(index) {
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            const testimonials = TestimonialManager.getAll();
-            testimonials.splice(index, 1);
-            localStorage.setItem('testimonials', JSON.stringify(testimonials));
-            renderTestimonials();
-            Swal.fire({ icon: 'success', title: 'Terhapus', text: 'Testimoni berhasil dihapus!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
-        }
     });
+    
+    if (result.isConfirmed) {
+        const response = await api.call(`/testimonials/${id}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.success) {
+            renderTestimonials();
+            Swal.fire({ 
+                icon: 'success', 
+                title: 'Terhapus', 
+                text: 'Testimoni berhasil dihapus!', 
+                background: '#1a1a2e', 
+                color: '#fff', 
+                timer: 1500, 
+                showConfirmButton: false 
+            });
+        }
+    }
 }
 
 // ========================================
 // CUSTOMERS
 // ========================================
-function renderCustomers() {
+async function renderCustomers() {
     const tbody = document.getElementById('customers-table-body');
     if (!tbody) return;
     
-    const salesHistory = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const testimonials = TestimonialManager.getAll();
+    const response = await api.call('/orders');
+    const testiResponse = await api.call('/testimonials/all');
+    
+    if (!response.success) return;
+    
+    const orders = response.data;
+    const testimonials = testiResponse.success ? testiResponse.data : [];
     
     // Aggregate customer data
     const customers = {};
-    salesHistory.forEach(sale => {
-        const custName = sale.name || '-';
+    orders.forEach(order => {
+        const custName = order.customerInfo?.name || '-';
         if (!customers[custName]) {
-            customers[custName] = { orders: 0, spent: 0, lastOrder: sale.date };
+            customers[custName] = { orders: 0, spent: 0, lastOrder: order.createdAt };
         }
         customers[custName].orders++;
-        customers[custName].spent += sale.price * sale.quantity;
-        if (new Date(sale.date) > new Date(customers[custName].lastOrder)) {
-            customers[custName].lastOrder = sale.date;
+        customers[custName].spent += order.total;
+        if (new Date(order.createdAt) > new Date(customers[custName].lastOrder)) {
+            customers[custName].lastOrder = order.createdAt;
         }
     });
     
@@ -921,6 +1095,16 @@ function renderCustomers() {
             <td>${Utils.formatDate(c.lastOrder)}</td>
         </tr>
     `).join('');
+}
+
+function exportCustomers() {
+    Swal.fire({
+        icon: 'info',
+        title: 'Export Pelanggan',
+        text: 'Fitur export akan segera hadir!',
+        background: '#1a1a2e',
+        color: '#fff'
+    });
 }
 
 // ========================================
@@ -998,7 +1182,15 @@ function saveSecuritySettings() {
 
 function toggleInputPassword(id) {
     const input = document.getElementById(id);
-    input.type = input.type === 'password' ? 'text' : 'password';
+    const btn = input.nextElementSibling.querySelector('i');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.classList.replace('fa-eye', 'fa-eye-slash');
+    } else {
+        input.type = 'password';
+        btn.classList.replace('fa-eye-slash', 'fa-eye');
+    }
 }
 
 function resetAllData() {
@@ -1007,56 +1199,38 @@ function resetAllData() {
         text: 'Semua data akan direset ke default!',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'Ya, Reset Semua',
+        confirmButtonText: 'Ya, Reset',
         cancelButtonText: 'Batal',
         background: '#1a1a2e',
         color: '#fff',
         confirmButtonColor: '#ef4444'
     }).then((result) => {
         if (result.isConfirmed) {
-            localStorage.removeItem('products');
-            localStorage.removeItem('salesHistory');
-            localStorage.removeItem('testimonials');
-            localStorage.removeItem('cart');
-            ProductManager.init();
-            TestimonialManager.init();
-            initDashboard();
-            Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Semua data direset!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
+            Swal.fire({
+                icon: 'success',
+                title: 'Berhasil',
+                text: 'Semua data telah direset!',
+                background: '#1a1a2e',
+                color: '#fff',
+                timer: 1500,
+                showConfirmButton: false
+            });
         }
     });
 }
 
 function clearCache() {
-    const essential = ['products', 'salesHistory', 'testimonials', 'pakasir_slug', 'pakasir_apikey'];
-    const keys = Object.keys(localStorage).filter(k => !essential.includes(k));
-    keys.forEach(k => localStorage.removeItem(k));
-    Swal.fire({ icon: 'success', title: 'Berhasil', text: 'Cache dibersihkan!', background: '#1a1a2e', color: '#fff', timer: 1500, showConfirmButton: false });
-}
-
-function exportProducts() {
-    const products = ProductManager.getAll();
-    const dataStr = JSON.stringify(products, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'products-backup.json';
-    a.click();
-}
-
-function exportOrders() {
-    const orders = JSON.parse(localStorage.getItem('salesHistory')) || [];
-    const dataStr = JSON.stringify(orders, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'orders-backup.json';
-    a.click();
-}
-
-function exportCustomers() {
-    Swal.fire({ icon: 'info', title: 'Info', text: 'Fitur export customers akan segera hadir!', background: '#1a1a2e', color: '#fff' });
+    localStorage.clear();
+    sessionStorage.clear();
+    Swal.fire({
+        icon: 'success',
+        title: 'Cache Dibersihkan',
+        text: 'Cache berhasil dibersihkan!',
+        background: '#1a1a2e',
+        color: '#fff',
+        timer: 1500,
+        showConfirmButton: false
+    });
 }
 
 // ========================================
@@ -1066,37 +1240,32 @@ document.addEventListener('DOMContentLoaded', () => {
     checkAuth();
 });
 
-// Add shake animation
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes shake {
-        0%, 100% { transform: translateX(0); }
-        10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
-        20%, 40%, 60%, 80% { transform: translateX(5px); }
-    }
-`;
-document.head.appendChild(style);
-
-// Expose functions globally
-window.showSection = showSection;
+// Expose functions to global scope
 window.login = login;
 window.logout = logout;
 window.togglePassword = togglePassword;
+window.showSection = showSection;
+window.updateSalesChart = updateSalesChart;
+window.filterProducts = filterProducts;
+window.filterProductsByCategory = filterProductsByCategory;
 window.openProductModal = openProductModal;
 window.closeProductModal = closeProductModal;
+window.toggleStockField = toggleStockField;
 window.saveProduct = saveProduct;
 window.editProduct = editProduct;
 window.deleteProduct = deleteProduct;
 window.resetProducts = resetProducts;
-window.filterProducts = filterProducts;
+window.exportProducts = exportProducts;
 window.openRestockModal = openRestockModal;
 window.closeRestockModal = closeRestockModal;
 window.confirmRestock = confirmRestock;
 window.filterOrders = filterOrders;
 window.deleteOrder = deleteOrder;
 window.clearAllOrders = clearAllOrders;
+window.exportOrders = exportOrders;
 window.filterTestimonials = filterTestimonials;
 window.deleteTestimonial = deleteTestimonial;
+window.exportCustomers = exportCustomers;
 window.savePakasirSettings = savePakasirSettings;
 window.saveOpenAISettings = saveOpenAISettings;
 window.savePteroSettings = savePteroSettings;
@@ -1105,7 +1274,3 @@ window.saveSecuritySettings = saveSecuritySettings;
 window.toggleInputPassword = toggleInputPassword;
 window.resetAllData = resetAllData;
 window.clearCache = clearCache;
-window.exportProducts = exportProducts;
-window.exportOrders = exportOrders;
-window.exportCustomers = exportCustomers;
-window.updateSalesChart = updateSalesChart;indow.updateSalesChart = updateSalesChart;
