@@ -6,6 +6,6 @@
   "type": "module",
   "dependencies": {
     "openai": "latest",
-    "@google/generative-ai": "latest"
+    "mongodb": "^6.5.0"
   }
 }
